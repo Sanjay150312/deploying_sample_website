@@ -3,7 +3,7 @@ name: Deploy to EC2
 on:
   push:
     branches:
-      - main   # adjust branch if needed
+      - main
 
 jobs:
   deploy:
@@ -18,33 +18,44 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ap-south-1   # change region if needed
+          aws-region: ap-south-1
 
       - name: Launch EC2 instance
         id: ec2
         run: |
           INSTANCE_ID=$(aws ec2 run-instances \
-            --image-id ami-05d2d839d4f73aafb \ # Ubuntu 22.04 LTS (adjust for region)
+            --image-id ami-05d2d839d4f73aafb \
             --count 1 \
             --instance-type t3.micro \
-            --key-name my-keypair \            # must exist in AWS
-            --security-groups my-sg \          # must allow port 80
+            --key-name my-keypair \
+            --security-groups my-sg \
+            --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=gh-deploy}]' \
             --query 'Instances[0].InstanceId' \
             --output text)
           echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
 
       - name: Get EC2 public IP
         run: |
-          PUBLIC_IP=$(aws ec2 describe-instances \
-            --instance-ids $INSTANCE_ID \
-            --query 'Reservations[0].Instances[0].PublicIpAddress' \
-            --output text)
+          sleep 10  # Wait for instance to start
+          until [ ! -z "$PUBLIC_IP" ] || [ $SECONDS -gt 60 ]; do
+            PUBLIC_IP=$(aws ec2 describe-instances \
+              --instance-ids ${{ env.INSTANCE_ID }} \
+              --query 'Reservations[0].Instances[0].PublicIpAddress' \
+              --output text)
+            sleep 5
+          done
           echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_ENV
+
+      - name: Store SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_PRIVATE_KEY }}" > ~/.ssh/my-keypair.pem
+          chmod 600 ~/.ssh/my-keypair.pem
 
       - name: Deploy with Docker Compose
         run: |
-          scp -o StrictHostKeyChecking=no -i my-keypair.pem docker-compose.yml index.html ubuntu@$PUBLIC_IP:/home/ubuntu/
-          ssh -o StrictHostKeyChecking=no -i my-keypair.pem ubuntu@$PUBLIC_IP << 'EOF'
+          scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i ~/.ssh/my-keypair.pem docker-compose.yml index.html ubuntu@${{ env.PUBLIC_IP }}:/home/ubuntu/
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i ~/.ssh/my-keypair.pem ubuntu@${{ env.PUBLIC_IP }} << 'EOF'
             sudo apt-get update -y
             sudo apt-get install -y docker.io docker-compose
             cd /home/ubuntu
