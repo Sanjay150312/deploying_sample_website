@@ -1,0 +1,52 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches:
+      - main   # adjust branch if needed
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-1   # change region if needed
+
+      - name: Launch EC2 instance
+        id: ec2
+        run: |
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --image-id ami-0f8ca728008ff5af4 \ # Ubuntu 22.04 LTS (adjust for region)
+            --count 1 \
+            --instance-type t3.micro \
+            --key-name my-keypair \            # must exist in AWS
+            --security-groups my-sg \          # must allow port 80
+            --query 'Instances[0].InstanceId' \
+            --output text)
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
+
+      - name: Get EC2 public IP
+        run: |
+          PUBLIC_IP=$(aws ec2 describe-instances \
+            --instance-ids $INSTANCE_ID \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' \
+            --output text)
+          echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_ENV
+
+      - name: Deploy with Docker Compose
+        run: |
+          scp -o StrictHostKeyChecking=no -i my-keypair.pem docker-compose.yml index.html ubuntu@$PUBLIC_IP:/home/ubuntu/
+          ssh -o StrictHostKeyChecking=no -i my-keypair.pem ubuntu@$PUBLIC_IP << 'EOF'
+            sudo apt-get update -y
+            sudo apt-get install -y docker.io docker-compose
+            cd /home/ubuntu
+            sudo docker-compose up -d
+          EOF
