@@ -46,16 +46,17 @@ jobs:
           done
           echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_ENV
 
-      - name: Store SSH key
+      - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_PRIVATE_KEY }}" > ~/.ssh/my-keypair.pem
-          chmod 600 ~/.ssh/my-keypair.pem
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ env.PUBLIC_IP }} >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Deploy with Docker Compose
         run: |
-          scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i ~/.ssh/my-keypair.pem docker-compose.yml index.html ubuntu@${{ env.PUBLIC_IP }}:/home/ubuntu/
-          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i ~/.ssh/my-keypair.pem ubuntu@${{ env.PUBLIC_IP }} << 'EOF'
+          scp -i ~/.ssh/id_rsa docker-compose.yml index.html ubuntu@${{ env.PUBLIC_IP }}:/home/ubuntu/
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ env.PUBLIC_IP }} << 'EOF'
             sudo apt-get update -y
             sudo apt-get install -y docker.io docker-compose
             cd /home/ubuntu
