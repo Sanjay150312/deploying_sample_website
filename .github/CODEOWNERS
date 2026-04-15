@@ -1,28 +1,6 @@
-ABOUT THIS TEMPLATE.txt
-css/
-  bootstrap.min.css    
-  tooplate-style.css
-docker-compose.yml
-fontawesome/
-  css/
-  webfonts/
-img/
-index.html                       @prasanthbaskaran98
-js/
-  anime.min.js
-  jquery-3.2.1.slim.min.js
-  main.js
-slick/
-  ajax-loader.gif
-  config.rb
-  fonts/
-  slick.css
-  slick.js
-  slick.less
-  slick.min.js
-  slick.scss
-  slick-theme.css
-  slick-theme.less
-  slick-theme.scss
-Workflow-docker.yml		@Vengatesan301
-
+/index.html            @prasanthbaskaran98
+/docker-compose.yml    @Vengatesan301
+/css/*                 @prasanthbaskaran98
+/js/*                  @prasanthbaskaran98
+/slick/*               @prasanthbaskaran98
+/img/*                 @Vengatesan301
