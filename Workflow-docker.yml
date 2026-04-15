@@ -1,0 +1,113 @@
+name: Deploy to EC2 as html file
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-1
+
+      - name: Launch EC2 instance
+        id: ec2
+        run: |
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --image-id ami-05d2d839d4f73aafb \
+            --count 1 \
+            --instance-type t3.micro \
+            --key-name my-keypair \
+            --security-groups my-sg \
+            --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=gh-deploy}]' \
+            --query 'Instances[0].InstanceId' \
+            --output text)
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
+
+      - name: Get EC2 public IP
+        run: |
+          sleep 10  # Wait for instance to start
+          until [ ! -z "$PUBLIC_IP" ] || [ $SECONDS -gt 60 ]; do
+            PUBLIC_IP=$(aws ec2 describe-instances \
+              --instance-ids ${{ env.INSTANCE_ID }} \
+              --query 'Reservations[0].Instances[0].PublicIpAddress' \
+              --output text)
+            sleep 5
+          done
+          echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_ENV
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          
+          # Verify SSH key format (PEM format required)
+          if ! openssl pkey -in ~/.ssh/id_rsa -check -noout 2>/dev/null; then
+            echo "Error: SSH key is not in valid PEM format"
+            exit 1
+          fi
+          echo "SSH key format verified successfully"
+          
+          # Add host to known_hosts with timeout
+          timeout 10 ssh-keyscan -H ${{ env.PUBLIC_IP }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Test SSH connection
+        run: |
+          echo "Testing SSH connection to ${{ env.PUBLIC_IP }}..."
+          ssh -v -i ~/.ssh/id_rsa \
+            -o ConnectTimeout=10 \
+            -o StrictHostKeyChecking=accept-new \
+            -o UserKnownHostsFile=~/.ssh/known_hosts \
+            ubuntu@${{ env.PUBLIC_IP }} "echo 'SSH connection successful'"
+          
+          if [ $? -ne 0 ]; then
+            echo "SSH connection failed"
+            exit 1
+          fi
+
+      - name: Deploy with Docker Compose
+        run: |
+          echo "Copying files to EC2..."
+          scp -i ~/.ssh/id_rsa \
+            -o ConnectTimeout=10 \
+            -o StrictHostKeyChecking=accept-new \
+            docker-compose.yml index.html \
+            ubuntu@${{ env.PUBLIC_IP }}:/home/ubuntu/
+          
+          if [ $? -ne 0 ]; then
+            echo "SCP file transfer failed"
+            exit 1
+          fi
+          
+          echo "Running deployment commands..."
+          ssh -i ~/.ssh/id_rsa \
+            -o ConnectTimeout=10 \
+            ubuntu@${{ env.PUBLIC_IP }} << 'EOF'
+            sudo apt-get update -y
+            sudo apt-get install -y docker.io docker-compose
+            cd /home/ubuntu
+            sudo docker-compose up -d
+          EOF
+
+      - name: Terminate EC2 instance (on failure)
+        if: failure()
+        run: |
+          aws ec2 terminate-instances --instance-ids ${{ env.INSTANCE_ID }}
+          echo "EC2 instance terminated due to deployment failure"
+
+      - name: Terminate EC2 instance (on success)
+        if: success()
+        run: |
+          aws ec2 terminate-instances --instance-ids ${{ env.INSTANCE_ID }}
+          echo "EC2 instance terminated after successful deployment"
